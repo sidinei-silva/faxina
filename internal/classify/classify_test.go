@@ -19,7 +19,15 @@ func TestApply(t *testing.T) {
 		action m.ActionKind
 	}{
 		{"volume com container", m.Item{Source: m.SourceVolume, Facts: m.Facts{Containers: 1, Anonymous: true, CreatedAt: old}}, m.StatusInUse, m.ActionNone},
-		{"volume anônimo antigo", m.Item{Source: m.SourceVolume, Facts: m.Facts{Anonymous: true, CreatedAt: old}}, m.StatusRemovable, m.ActionVolumeRm},
+		{"anônimo não inspecionado", m.Item{Source: m.SourceVolume, Facts: m.Facts{Anonymous: true, CreatedAt: old}}, m.StatusCandidate, m.ActionVolumeRm},
+		{"anônimo com registry", m.Item{Source: m.SourceVolume, Facts: m.Facts{Anonymous: true, CreatedAt: old, Content: m.VolumeRegistry}}, m.StatusRemovable, m.ActionVolumeRm},
+		{"anônimo vazio", m.Item{Source: m.SourceVolume, Facts: m.Facts{Anonymous: true, CreatedAt: old, Content: m.VolumeEmpty}}, m.StatusRemovable, m.ActionVolumeRm},
+		{"anônimo com mysql", m.Item{Source: m.SourceVolume, Facts: m.Facts{Anonymous: true, CreatedAt: old, Content: m.VolumeMySQL}}, m.StatusCandidate, m.ActionVolumeRm},
+		{"anônimo com postgres", m.Item{Source: m.SourceVolume, Facts: m.Facts{Anonymous: true, CreatedAt: old, Content: m.VolumePostgres}}, m.StatusCandidate, m.ActionVolumeRm},
+		{"anônimo com redis", m.Item{Source: m.SourceVolume, Facts: m.Facts{Anonymous: true, CreatedAt: old, Content: m.VolumeRedis}}, m.StatusCandidate, m.ActionVolumeRm},
+		{"anônimo desconhecido", m.Item{Source: m.SourceVolume, Facts: m.Facts{Anonymous: true, CreatedAt: old, Content: m.VolumeOther}}, m.StatusCandidate, m.ActionVolumeRm},
+		{"registry recente", m.Item{Source: m.SourceVolume, Facts: m.Facts{Anonymous: true, CreatedAt: recent, Content: m.VolumeRegistry}}, m.StatusCandidate, m.ActionVolumeRm},
+		{"nomeado com registry", m.Item{Source: m.SourceVolume, Facts: m.Facts{CreatedAt: old, Content: m.VolumeRegistry}}, m.StatusCandidate, m.ActionVolumeRm},
 		{"volume anônimo recente", m.Item{Source: m.SourceVolume, Facts: m.Facts{Anonymous: true, CreatedAt: recent}}, m.StatusCandidate, m.ActionVolumeRm},
 		{"volume nomeado antigo", m.Item{Source: m.SourceVolume, Facts: m.Facts{CreatedAt: old}}, m.StatusCandidate, m.ActionVolumeRm},
 		{"volume sem data", m.Item{Source: m.SourceVolume, Facts: m.Facts{Anonymous: true}}, m.StatusCandidate, m.ActionVolumeRm},

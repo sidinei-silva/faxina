@@ -125,8 +125,13 @@ func TestDocker(t *testing.T) {
 	 {"InUse":"false","Shared":"true","Size":"9GB","CreatedAt":"2026-09-01 10:00:00.5 +0000 UTC","LastUsedAt":"2026-09-02 10:00:00.5 +0000 UTC"},
 	 {"InUse":"false","Shared":"false","Size":"2GB","CreatedAt":"2026-11-05 10:00:00.5 +0000 UTC","LastUsedAt":"2026-11-05 11:00:00.5 +0000 UTC"}]}`
 	r := &runner.Fake{Outputs: map[string]string{
-		"docker system df -v --format json":       df,
-		"docker volume inspect anon1 dados usado": `[{"Name":"anon1","CreatedAt":"2026-09-01T10:00:00-03:00"},{"Name":"dados","CreatedAt":"2026-09-01T10:00:00-03:00"},{"Name":"usado","CreatedAt":"2026-09-01T10:00:00-03:00"}]`,
+		"docker ps -a -q --filter label=" + inspectLabel:                             "",
+		"docker image inspect " + inspectImage:                                       "[]",
+		"docker " + strings.Join(inspectCreateArgs([]string{"anon1", "dados"}), " "): "cid\n",
+		"docker start -a cid":                                                        "anon1|docker,|yes\ndados|auto.cnf,ibdata1,|no\n",
+		"docker rm cid":                                                              "cid\n",
+		"docker system df -v --format json":                                          df,
+		"docker volume inspect anon1 dados usado":                                    `[{"Name":"anon1","CreatedAt":"2026-09-01T10:00:00-03:00"},{"Name":"dados","CreatedAt":"2026-09-01T10:00:00-03:00"},{"Name":"usado","CreatedAt":"2026-09-01T10:00:00-03:00"}]`,
 	}}
 	items, warnings := collectDocker(context.Background(), r, KubeState{Deployed: map[string]bool{}}, now)
 	if len(warnings) > 0 {
@@ -150,13 +155,13 @@ func TestDocker(t *testing.T) {
 	if f := find("sha256:ccc"); f.Tag != "<none>" || !f.Infra {
 		t.Errorf("kindest sem tag: %+v", f)
 	}
-	if f := find("anon1"); !f.Anonymous || f.Containers != 0 || f.CreatedAt.IsZero() {
+	if f := find("anon1"); !f.Anonymous || f.Containers != 0 || f.CreatedAt.IsZero() || f.Content != m.VolumeRegistry {
 		t.Errorf("anon1: %+v", f)
 	}
-	if f := find("dados"); f.Anonymous {
+	if f := find("dados"); f.Anonymous || f.Content != m.VolumeMySQL {
 		t.Errorf("dados: %+v", f)
 	}
-	if f := find("usado"); f.Containers != 1 {
+	if f := find("usado"); f.Containers != 1 || f.Content != m.VolumeUnknown {
 		t.Errorf("usado: %+v", f)
 	}
 	for _, it := range items {
@@ -223,6 +228,54 @@ func TestOpenPaths(t *testing.T) {
 	for path, want := range map[string]bool{"/a/b": true, "/a/b/c": true, "/a/b-x": true, "/a/bb": false, "/q": false, "/z": true} {
 		if got := o.Contains(path); got != want {
 			t.Errorf("Contains(%s) = %v, quer %v", path, got, want)
+		}
+	}
+}
+
+func TestVolumeInspectionNuncaUsaRmComV(t *testing.T) {
+	r := &runner.Fake{Outputs: map[string]string{
+		"docker ps -a -q --filter label=" + inspectLabel: "velho\n",
+		"docker rm velho":                                                "",
+		"docker image inspect " + inspectImage:                           "[]",
+		"docker " + strings.Join(inspectCreateArgs([]string{"v1"}), " "): "cid\n",
+		"docker start -a cid":                                            "v1||no\n",
+		"docker rm cid":                                                  "",
+	}}
+	got, warnings := inspectVolumes(context.Background(), r, []string{"v1"})
+	if got["v1"] != m.VolumeEmpty || len(warnings) != 0 {
+		t.Fatalf("got=%v warnings=%v", got, warnings)
+	}
+	for _, call := range r.Calls {
+		if strings.Contains(call, "rm -v") || strings.Contains(call, " --rm") || strings.Contains(call, "volume rm") {
+			t.Errorf("chamada perigosa: %s", call)
+		}
+	}
+}
+
+func TestVolumeInspectionFalhaViraDesconhecido(t *testing.T) {
+	got, warnings := inspectVolumes(context.Background(), &runner.Fake{}, []string{"v1"})
+	if len(got) != 0 || len(warnings) == 0 {
+		t.Fatalf("got=%v warnings=%v", got, warnings)
+	}
+}
+
+func TestDetectVolumeContent(t *testing.T) {
+	for _, tt := range []struct {
+		entries  string
+		registry bool
+		want     m.VolumeContent
+	}{
+		{"", false, m.VolumeEmpty},
+		{"docker,", true, m.VolumeRegistry},
+		{"docker,", false, m.VolumeOther},
+		{"docker,extra,", true, m.VolumeOther},
+		{"auto.cnf,ca.pem,", false, m.VolumeMySQL},
+		{"PG_VERSION,base,", false, m.VolumePostgres},
+		{"dump.rdb,", false, m.VolumeRedis},
+		{"foo,", false, m.VolumeOther},
+	} {
+		if got := detectVolumeContent(tt.entries, tt.registry); got != tt.want {
+			t.Errorf("%q: %s, quer %s", tt.entries, got, tt.want)
 		}
 	}
 }

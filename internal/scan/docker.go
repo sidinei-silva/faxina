@@ -67,6 +67,15 @@ func dockerVolumes(ctx context.Context, r runner.Runner, df dockerDF) ([]m.Item,
 			}
 		}
 	}
+	var orphans []string
+	for _, v := range df.Volumes {
+		if v.Links == "0" && ValidVolumeName(v.Name) {
+			orphans = append(orphans, v.Name)
+		}
+	}
+	contents, w := inspectVolumes(ctx, r, orphans)
+	warnings = append(warnings, w...)
+
 	items := make([]m.Item, 0, len(df.Volumes))
 	for _, v := range df.Volumes {
 		links, _ := strconv.Atoi(v.Links)
@@ -74,15 +83,16 @@ func dockerVolumes(ctx context.Context, r runner.Runner, df dockerDF) ([]m.Item,
 			links = 1 // sem contagem confiável, assume em uso
 		}
 		anonymous := strings.Contains(v.Labels, "com.docker.volume.anonymous")
-		name, detail := v.Name, "Volume nomeado"
+		content := contents[v.Name]
+		name, detail := v.Name, "Volume nomeado. "+ContentDescription(content)
 		if anonymous {
-			name, detail = "Volume anônimo "+shortID(v.Name), "ID completo: "+v.Name
+			name, detail = "Volume anônimo "+shortID(v.Name), ContentDescription(content)+" ID: "+v.Name
 		}
 		items = append(items, m.Item{
 			ID:     m.NewID(m.SourceVolume, v.Name),
 			Source: m.SourceVolume, Group: m.GroupVolumes,
 			Name: name, Detail: detail, SizeBytes: parseDockerSize(v.Size),
-			Facts: m.Facts{Label: v.Name, Containers: links, Anonymous: anonymous, CreatedAt: created[v.Name]},
+			Facts: m.Facts{Label: v.Name, Containers: links, Anonymous: anonymous, Content: content, CreatedAt: created[v.Name]},
 		})
 	}
 	return items, warnings

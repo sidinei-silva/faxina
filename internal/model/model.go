@@ -84,10 +84,24 @@ type Action struct {
 // Executable indica se a ação pode ser executada pelo app.
 func (a Action) Executable() bool { return a.Kind != "" && a.Kind != ActionNone }
 
+// VolumeContent é o tipo de dado encontrado num volume Docker.
+type VolumeContent string
+
+const (
+	VolumeUnknown  VolumeContent = ""
+	VolumeEmpty    VolumeContent = "empty"
+	VolumeRegistry VolumeContent = "registry"
+	VolumeMySQL    VolumeContent = "mysql"
+	VolumePostgres VolumeContent = "postgres"
+	VolumeRedis    VolumeContent = "redis"
+	VolumeOther    VolumeContent = "other"
+)
+
 // Facts guarda o que os coletores observaram. Não é enviado à UI.
 type Facts struct {
 	Containers    int
 	Anonymous     bool
+	Content       VolumeContent
 	CreatedAt     time.Time
 	LastActivity  time.Time
 	Repo          string

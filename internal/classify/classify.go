@@ -38,12 +38,20 @@ func Apply(it *m.Item, now time.Time) {
 			set(m.StatusInUse, fmt.Sprintf("Montado em %d container(s).", f.Containers), none)
 		case f.CreatedAt.IsZero():
 			set(m.StatusCandidate, "Sem container, mas a data de criação é desconhecida.", rm)
-		case f.Anonymous && now.Sub(f.CreatedAt) > dockerMinAge:
-			set(m.StatusRemovable, "Volume anônimo, sem container, criado há mais de 7 dias.", rm)
-		case f.Anonymous:
-			set(m.StatusCandidate, "Volume anônimo sem container, mas criado há menos de 7 dias.", rm)
-		default:
+		case !f.Anonymous:
 			set(m.StatusCandidate, "Volume nomeado sem container: pode guardar dados que você quer manter.", rm)
+		case now.Sub(f.CreatedAt) <= dockerMinAge:
+			set(m.StatusCandidate, "Volume anônimo sem container, mas criado há menos de 7 dias.", rm)
+		case f.Content == m.VolumeRegistry:
+			set(m.StatusRemovable, "Cópia do registry local sem container há mais de 7 dias: as imagens voltam com novo build.", rm)
+		case f.Content == m.VolumeEmpty:
+			set(m.StatusRemovable, "Volume anônimo vazio, sem container, criado há mais de 7 dias.", rm)
+		case f.Content == m.VolumeMySQL, f.Content == m.VolumePostgres, f.Content == m.VolumeRedis:
+			set(m.StatusCandidate, "Contém dados de banco: confira antes de remover.", rm)
+		case f.Content == m.VolumeOther:
+			set(m.StatusCandidate, "Volume anônimo com conteúdo não reconhecido: confira antes de remover.", rm)
+		default:
+			set(m.StatusCandidate, "Volume anônimo que não pôde ser inspecionado.", rm)
 		}
 
 	case m.SourceImage:

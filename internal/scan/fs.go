@@ -275,7 +275,7 @@ func (s *fsScan) claim(path, name, parent string) *bucket {
 	if name == "node_modules" {
 		rp, _ := filepath.Rel(s.home, parent)
 		b := mk(m.SourceNodeModules, m.GroupDeps, rp, "")
-		b.item.Facts.HasLockfile = hasLockfile(parent)
+		b.item.Facts.HasLockfile = HasLockfile(parent)
 		b.item.Facts.ProjectActive = isProjectActive(parent, s.home, s.now)
 		return b
 	}
@@ -394,7 +394,8 @@ func exists(path string) bool {
 	return err == nil
 }
 
-func hasLockfile(dir string) bool {
+// HasLockfile diz se o projeto tem como restaurar as dependências.
+func HasLockfile(dir string) bool {
 	for _, name := range lockfiles {
 		if exists(filepath.Join(dir, name)) {
 			return true
@@ -434,6 +435,9 @@ func hiddenPath(rel string) bool {
 	}
 	return false
 }
+
+// BackupName diz se o nome do arquivo parece um backup.
+func BackupName(name string) bool { return backupNameRe.MatchString(name) }
 
 func insideGit(rel string) bool {
 	return strings.Contains("/"+rel, "/.git/")
