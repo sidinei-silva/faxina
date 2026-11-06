@@ -28,6 +28,8 @@ type dockerDF struct {
 
 // collectDocker levanta volumes, imagens e build cache.
 func collectDocker(ctx context.Context, r runner.Runner, kube KubeState, now time.Time) ([]m.Item, []string) {
+	// Antes do df: um inspetor esquecido faria os volumes parecerem em uso.
+	removeStaleInspectors(context.WithoutCancel(ctx), r)
 	out, err := r.Run(ctx, "docker", "system", "df", "-v", "--format", "json")
 	if err != nil {
 		return nil, []string{"Docker indisponível; volumes, imagens e build cache não foram analisados: " + err.Error()}
@@ -142,7 +144,7 @@ func dockerImages(df dockerDF, kube KubeState) []m.Item {
 				LocalRegistry: info[i].local,
 				NewestInRepo:  info[i].local && !info[i].created.Before(newest[img.Repository]),
 				Infra:         classify.IsInfraImage(img.Repository),
-				Deployed:      tagged && kube.Deployed[NormalizeImageRef(ref)],
+				Deployed:      tagged && kube.Uses(ref),
 				KubeUnknown:   kube.Unknown,
 			},
 		})

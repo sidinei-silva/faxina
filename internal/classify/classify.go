@@ -83,7 +83,7 @@ func Apply(it *m.Item, now time.Time) {
 		set(m.StatusRemovable, "Cache de build sem uso há mais de 7 dias.",
 			m.Action{Kind: m.ActionBuilderPruneOld, Command: builderPruneOld})
 	case m.SourceBuildCacheNew:
-		set(m.StatusCandidate, "Cache de build usado nos últimos 7 dias: acelera os próximos builds.",
+		set(m.StatusCandidate, "Cache de build usado nos últimos 7 dias: acelera os próximos builds. Limpar este item apaga também o cache antigo.",
 			m.Action{Kind: m.ActionBuilderPruneAll, Command: builderPruneAll})
 
 	case m.SourceTrash:
@@ -126,12 +126,24 @@ func Apply(it *m.Item, now time.Time) {
 			set(m.StatusCandidate, "Projeto parado há mais de 30 dias; dá para restaurar pelo lockfile.", removePath)
 		}
 	case m.SourceGoMod:
-		set(m.StatusCandidate, "Cache de módulos Go: remover exige baixar de novo.", removePath)
+		if f.OpenByProcess {
+			set(m.StatusInUse, "Há processo com arquivo aberto aqui.", none)
+		} else {
+			set(m.StatusCandidate, "Cache de módulos Go: remover exige baixar de novo.", removePath)
+		}
 
 	case m.SourceBackup:
-		set(m.StatusCandidate, "Parece um backup: confira antes de remover, pois não há como recuperar.", removePath)
+		if f.OpenByProcess {
+			set(m.StatusInUse, "Há processo com este arquivo aberto.", none)
+		} else {
+			set(m.StatusCandidate, "Parece um backup: confira antes de remover, pois não há como recuperar.", removePath)
+		}
 	case m.SourceLargeFile:
-		set(m.StatusCandidate, "Arquivo grande sem alteração há mais de 90 dias: confira antes de remover.", removePath)
+		if f.OpenByProcess {
+			set(m.StatusInUse, "Há processo com este arquivo aberto.", none)
+		} else {
+			set(m.StatusCandidate, "Arquivo grande sem alteração há mais de 90 dias: confira antes de remover.", removePath)
+		}
 
 	case m.SourceSteamGame:
 		if f.LastActivity.IsZero() || now.Sub(f.LastActivity) > steamUnplayed {

@@ -128,7 +128,7 @@ func TestDocker(t *testing.T) {
 		"docker ps -a -q --filter label=" + inspectLabel:                             "",
 		"docker image inspect " + inspectImage:                                       "[]",
 		"docker " + strings.Join(inspectCreateArgs([]string{"anon1", "dados"}), " "): "cid\n",
-		"docker start -a cid":                                                        "anon1|docker,|yes\ndados|auto.cnf,ibdata1,|no\n",
+		"docker start -a cid":                                                        "anon1|yes|docker,\ndados|no|auto.cnf,ibdata1,\n",
 		"docker rm cid":                                                              "cid\n",
 		"docker system df -v --format json":                                          df,
 		"docker volume inspect anon1 dados usado":                                    `[{"Name":"anon1","CreatedAt":"2026-09-01T10:00:00-03:00"},{"Name":"dados","CreatedAt":"2026-09-01T10:00:00-03:00"},{"Name":"usado","CreatedAt":"2026-09-01T10:00:00-03:00"}]`,
@@ -234,11 +234,9 @@ func TestOpenPaths(t *testing.T) {
 
 func TestVolumeInspectionNuncaUsaRmComV(t *testing.T) {
 	r := &runner.Fake{Outputs: map[string]string{
-		"docker ps -a -q --filter label=" + inspectLabel: "velho\n",
-		"docker rm velho":                                                "",
 		"docker image inspect " + inspectImage:                           "[]",
 		"docker " + strings.Join(inspectCreateArgs([]string{"v1"}), " "): "cid\n",
-		"docker start -a cid":                                            "v1||no\n",
+		"docker start -a cid":                                            "v1|no|\n",
 		"docker rm cid":                                                  "",
 	}}
 	got, warnings := inspectVolumes(context.Background(), r, []string{"v1"})
@@ -276,6 +274,80 @@ func TestDetectVolumeContent(t *testing.T) {
 	} {
 		if got := detectVolumeContent(tt.entries, tt.registry); got != tt.want {
 			t.Errorf("%q: %s, quer %s", tt.entries, got, tt.want)
+		}
+	}
+}
+
+func TestFalhaAoListarVolumeNaoPareceVazio(t *testing.T) {
+	r := &runner.Fake{Outputs: map[string]string{
+		"docker image inspect " + inspectImage:                                 "[]",
+		"docker " + strings.Join(inspectCreateArgs([]string{"v1", "v2"}), " "): "cid\n",
+		"docker start -a cid": "v1|err|\nv2|no|a|b,\n",
+		"docker rm cid":       "",
+	}}
+	got, _ := inspectVolumes(context.Background(), r, []string{"v1", "v2"})
+	if c, ok := got["v1"]; ok {
+		t.Errorf("falha na listagem virou %q", c)
+	}
+	if got["v2"] != m.VolumeOther {
+		t.Errorf("nome com barra vertical: %q", got["v2"])
+	}
+}
+
+func TestInspetorAntigoSaiAntesDoDF(t *testing.T) {
+	r := &runner.Fake{Outputs: map[string]string{
+		"docker ps -a -q --filter label=" + inspectLabel: "velho\n",
+		"docker rm velho":                   "",
+		"docker system df -v --format json": `{"Images":[],"Volumes":[],"BuildCache":[]}`,
+	}}
+	collectDocker(context.Background(), r, KubeState{}, time.Now())
+	if len(r.Calls) < 3 || r.Calls[1] != "docker rm velho" || !strings.HasPrefix(r.Calls[2], "docker system df") {
+		t.Fatalf("ordem: %v", r.Calls)
+	}
+}
+
+func TestKubeReferencias(t *testing.T) {
+	r := &runner.Fake{Outputs: map[string]string{
+		"kind get clusters": "gc\n",
+		"kubectl --context kind-gc get pods -A -o json": `{"items":[{"spec":{"containers":[
+		 {"image":"localhost:5000/implicita"},
+		 {"image":"localhost:5000/comtag:abc@sha256:111"},
+		 {"image":"localhost:5000/sotag@sha256:222"}]}}]}`,
+	}}
+	state, _ := CollectKube(context.Background(), r)
+	for ref, want := range map[string]bool{
+		"localhost:5000/implicita:latest": true,
+		"localhost:5000/implicita:velha":  false,
+		"localhost:5000/comtag:abc":       true,
+		"localhost:5000/comtag:def":       false,
+		"localhost:5000/sotag:qualquer":   true,
+		"localhost:5000/outra:1":          false,
+	} {
+		if got := state.Uses(ref); got != want {
+			t.Errorf("Uses(%s) = %v, quer %v", ref, got, want)
+		}
+	}
+}
+
+func TestLinkRepetidoContaComoAtividade(t *testing.T) {
+	home := t.TempDir()
+	old := time.Now().Add(-240 * time.Hour)
+	recent := time.Now().Add(-time.Hour)
+	first := filepath.Join(home, ".cache/a/f")
+	write(t, first, 2<<20, old)
+	write(t, filepath.Join(home, ".cache/a/novo"), 2<<20, recent)
+	write(t, filepath.Join(home, ".cache/b/base"), 2<<20, old)
+	if err := os.Link(filepath.Join(home, ".cache/a/novo"), filepath.Join(home, ".cache/b/novo")); err != nil {
+		t.Fatal(err)
+	}
+	items, _ := ScanHome(context.Background(), home, time.Now(), nil)
+	got := bySource(items, m.SourceAppCache)
+	if len(got) != 2 {
+		t.Fatalf("itens: %+v", got)
+	}
+	for _, it := range got {
+		if it.Facts.LastActivity.Before(recent.Add(-time.Minute)) {
+			t.Errorf("%s ignorou o link recente: %v", it.Name, it.Facts.LastActivity)
 		}
 	}
 }

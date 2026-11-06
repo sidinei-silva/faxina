@@ -38,7 +38,11 @@
       {/each}
     </ul>
   {/if}
-  {#if report.auditPath}<p class="audit">Registro completo em <code>{report.auditPath}</code></p>{/if}
+  {#if report.auditError}
+    <p class="note">O registro da limpeza falhou e pode estar incompleto: {report.auditError}</p>
+  {:else if report.auditPath}
+    <p class="audit">Registro completo em <code>{report.auditPath}</code></p>
+  {/if}
 </section>
 
 <style>

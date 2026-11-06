@@ -74,6 +74,7 @@ type Report struct {
 	After          m.Disk    `json:"after"`
 	Note           string    `json:"note"`
 	AuditPath      string    `json:"auditPath"`
+	AuditError     string    `json:"auditError"`
 }
 
 // Options configura o serviço.
@@ -140,6 +141,7 @@ func (s *Service) Preview(ctx context.Context, ids []string) (*Plan, error) {
 	v := newValidator(ctx, s.opts)
 	plan := &Plan{ID: newPlanID(), Entries: []Entry{}}
 	seen := map[string]bool{}
+	ids = s.withImpliedItems(ids)
 	for _, id := range ids {
 		if seen[id] {
 			continue
@@ -166,9 +168,29 @@ func (s *Service) Preview(ctx context.Context, ids []string) (*Plan, error) {
 		}
 		plan.Entries = append(plan.Entries, entry)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, errors.New("prévia cancelada")
+	}
 	sortEntries(plan.Entries, s.items)
 	s.plans[plan.ID] = plan
 	return plan, nil
+}
+
+// withImpliedItems torna visível o que um comando apaga além do item marcado:
+// o prune sem filtro também remove o build cache antigo.
+func (s *Service) withImpliedItems(ids []string) []string {
+	out := append([]string{}, ids...)
+	for _, id := range ids {
+		if s.items[id].Source != m.SourceBuildCacheNew {
+			continue
+		}
+		for otherID, other := range s.items {
+			if other.Source == m.SourceBuildCacheOld {
+				out = append(out, otherID)
+			}
+		}
+	}
+	return out
 }
 
 // Execute roda uma prévia uma única vez, revalidando item a item.
@@ -187,11 +209,21 @@ func (s *Service) Execute(ctx context.Context, planID string, dryRun bool, progr
 	if !dryRun {
 		report.AuditPath = s.opts.AuditPath
 	}
-	v := newValidator(ctx, s.opts)
+	// Uma ação em andamento sempre termina: cancelar só impede os próximos itens.
+	work := context.WithoutCancel(ctx)
+	v := newValidator(work, s.opts)
 	total := plan.Accepted
 	done := 0
+	auditFailed := func(err error) {
+		if err != nil && report.AuditError == "" {
+			report.AuditError = err.Error()
+		}
+	}
 	for _, entry := range plan.Entries {
 		if entry.Refused != "" {
+			if !dryRun {
+				auditFailed(s.audit(map[string]any{"event": "refused", "plan": planID, "item": entry.ItemID, "name": entry.Name, "error": entry.Refused}))
+			}
 			continue
 		}
 		it := s.items[entry.ItemID]
@@ -202,13 +234,17 @@ func (s *Service) Execute(ctx context.Context, planID string, dryRun bool, progr
 		}
 		switch {
 		case ctx.Err() != nil:
-			report.Canceled = true
 			out.Skipped, out.Error = true, "Limpeza cancelada antes deste item."
 		default:
 			if err := v.check(it); err != nil {
 				out.Skipped, out.Error = true, "Recusado na revalidação: "+err.Error()
 			} else if !dryRun {
-				if err := s.run(ctx, it); err != nil {
+				// O registro vem antes: uma queda no meio ainda deixa rastro.
+				auditFailed(s.audit(map[string]any{
+					"event": "start", "plan": planID, "item": it.ID, "name": it.Name, "status": it.Status,
+					"command": it.Action.Command, "path": it.Path, "sizeBytes": it.SizeBytes,
+				}))
+				if err := s.run(work, it); err != nil {
 					out.Error = err.Error()
 				} else {
 					out.OK = true
@@ -221,9 +257,13 @@ func (s *Service) Execute(ctx context.Context, planID string, dryRun bool, progr
 		}
 		report.Outcomes = append(report.Outcomes, out)
 		if !dryRun {
-			s.audit(planID, it, out)
+			auditFailed(s.audit(map[string]any{
+				"event": "result", "plan": planID, "item": it.ID, "name": it.Name,
+				"ok": out.OK, "skipped": out.Skipped, "error": out.Error,
+			}))
 		}
 	}
+	report.Canceled = ctx.Err() != nil
 	if !dryRun {
 		syscall.Sync()
 	}
@@ -295,23 +335,25 @@ func removePath(it m.Item) error {
 	return nil
 }
 
-func (s *Service) audit(planID string, it m.Item, out Outcome) {
+// audit grava um evento. A falha não interrompe a limpeza, pois disco cheio é justamente
+// o caso de uso, mas é informada na tela final.
+func (s *Service) audit(event map[string]any) error {
 	if s.opts.AuditPath == "" {
-		return
+		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(s.opts.AuditPath), 0o700); err != nil {
-		return
+		return err
 	}
 	f, err := os.OpenFile(s.opts.AuditPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
-		return
+		return err
 	}
-	defer f.Close()
-	_ = json.NewEncoder(f).Encode(map[string]any{
-		"time": s.opts.Now().Format(time.RFC3339), "plan": planID, "item": it.ID, "name": it.Name,
-		"status": it.Status, "command": it.Action.Command, "path": it.Path, "sizeBytes": it.SizeBytes,
-		"ok": out.OK, "skipped": out.Skipped, "error": out.Error,
-	})
+	event["time"] = s.opts.Now().Format(time.RFC3339)
+	if err := json.NewEncoder(f).Encode(event); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // sortEntries executa imagens antes de volumes, build cache e arquivos; root por último.
@@ -432,7 +474,7 @@ func (v *validator) checkImage(it m.Item) error {
 	if v.kube.Unknown {
 		return errors.New("Não foi possível confirmar se o cluster kind usa esta imagem.")
 	}
-	if v.kube.Deployed[scan.NormalizeImageRef(ref)] {
+	if v.kube.Uses(ref) {
 		return errors.New("Um pod do cluster kind passou a usar esta imagem.")
 	}
 	return nil
@@ -446,9 +488,9 @@ func (v *validator) checkPath(it m.Item) error {
 	if v.open.Contains(it.Path) {
 		return errors.New("Há processo com arquivo aberto neste caminho.")
 	}
-	newest, err := newestMTime(it.Path)
+	newest, err := inspectTree(it.Path)
 	if err != nil {
-		return fmt.Errorf("Não foi possível ler o caminho: %v", err)
+		return err
 	}
 	if !it.Facts.LastActivity.IsZero() && newest.After(it.Facts.LastActivity.Add(time.Second)) {
 		return errors.New("O conteúdo mudou depois da varredura.")
@@ -528,20 +570,48 @@ func PathAllowed(it m.Item, home string) error {
 	return nil
 }
 
-func newestMTime(path string) (time.Time, error) {
+// inspectTree devolve a alteração mais recente e recusa árvores que cruzam dispositivos:
+// a varredura não mede montagens nem subvolumes internos, então a limpeza não pode apagá-los.
+func inspectTree(path string) (time.Time, error) {
 	var newest time.Time
-	err := filepath.WalkDir(path, func(_ string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.Type()&os.ModeSymlink != 0 || d.IsDir() {
+	root, err := os.Lstat(path)
+	if err != nil {
+		return newest, fmt.Errorf("Não foi possível ler o caminho: %v", err)
+	}
+	dev, err := deviceOf(root)
+	if err != nil {
+		return newest, err
+	}
+	err = filepath.WalkDir(path, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil || d.Type()&os.ModeSymlink != 0 {
 			return nil
 		}
 		info, err := d.Info()
-		if err == nil && info.ModTime().After(newest) {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			other, err := deviceOf(info)
+			if err != nil {
+				return err
+			}
+			if other != dev {
+				return errors.New("Há ponto de montagem ou subvolume neste caminho.")
+			}
+			return nil
+		}
+		if info.ModTime().After(newest) {
 			newest = info.ModTime()
 		}
 		return nil
 	})
 	return newest, err
+}
+
+func deviceOf(info os.FileInfo) (uint64, error) {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, errors.New("Não foi possível identificar o dispositivo do caminho.")
+	}
+	return uint64(st.Dev), nil
 }

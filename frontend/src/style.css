@@ -76,7 +76,7 @@ button { font-family: inherit; }
 .ghost { border-color: var(--line-strong); background: none; color: var(--ink); font-weight: 400; }
 .ghost:hover { background: var(--hover); }
 .danger { background: var(--danger); color: #fff; }
-.primary:disabled, .danger:disabled { opacity: 0.45; cursor: not-allowed; }
+.primary:disabled, .danger:disabled, .ghost:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .link {
   flex: none;

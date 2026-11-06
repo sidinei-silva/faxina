@@ -209,8 +209,11 @@ func TestExecutorArvoreFalsa(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if lines := strings.Count(string(data), "\n"); lines != 3 {
-		t.Errorf("auditoria: %d linhas", lines)
+	if starts := strings.Count(string(data), `"event":"start"`); starts != 3 {
+		t.Errorf("auditoria: %d inícios", starts)
+	}
+	if results := strings.Count(string(data), `"event":"result"`); results != 3 {
+		t.Errorf("auditoria: %d resultados", results)
 	}
 }
 
@@ -422,5 +425,119 @@ func TestIntegracaoDocker(t *testing.T) {
 	}
 	if err := exec.Command("docker", "volume", "inspect", attached).Run(); err != nil {
 		t.Error("o volume com container deveria continuar")
+	}
+}
+
+func TestCacheRecenteIncluiOAntigoNaPrevia(t *testing.T) {
+	old := m.Item{ID: "old", Source: m.SourceBuildCacheOld, Name: "old", SizeBytes: 5}
+	recent := m.Item{ID: "new", Source: m.SourceBuildCacheNew, Name: "new", SizeBytes: 7}
+	classify.Apply(&old, time.Now())
+	classify.Apply(&recent, time.Now())
+	s := newService(t, t.TempDir(), &runner.Fake{}, old, recent)
+	plan, err := s.Preview(context.Background(), []string{"new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Accepted != 2 || plan.TotalBytes != 12 || plan.Entries[0].ItemID != "old" {
+		t.Fatalf("plan: %+v", plan)
+	}
+	only, _ := s.Preview(context.Background(), []string{"old"})
+	if only.Accepted != 1 {
+		t.Fatalf("o antigo não deve puxar o recente: %+v", only)
+	}
+}
+
+type cancelingRunner struct {
+	runner.Fake
+	cancel context.CancelFunc
+	ctxErr error
+}
+
+func (c *cancelingRunner) Run(ctx context.Context, name string, args ...string) (string, error) {
+	if name == "docker" && len(args) > 0 && args[0] == "builder" {
+		c.cancel()
+		c.ctxErr = ctx.Err()
+	}
+	return "", nil
+}
+
+func TestCancelarNaoInterrompeItemAtual(t *testing.T) {
+	old := m.Item{ID: "old", Source: m.SourceBuildCacheOld, Name: "old", SizeBytes: 5}
+	classify.Apply(&old, time.Now())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := &cancelingRunner{cancel: cancel}
+	s := newService(t, t.TempDir(), r, old)
+	plan, err := s.Preview(context.Background(), []string{"old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := s.Execute(ctx, plan.ID, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.ctxErr != nil {
+		t.Error("o comando em andamento recebeu o cancelamento")
+	}
+	if !report.Outcomes[0].OK || !report.Canceled {
+		t.Fatalf("report: %+v", report)
+	}
+}
+
+func TestPreviaCancelada(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s := newService(t, t.TempDir(), &runner.Fake{})
+	if _, err := s.Preview(ctx, nil); err == nil {
+		t.Fatal("prévia cancelada não pode virar plano")
+	}
+}
+
+func TestFalhaNaAuditoriaApareceNoRelatorio(t *testing.T) {
+	home := t.TempDir()
+	old := time.Now().Add(-240 * time.Hour)
+	writeFile(t, filepath.Join(home, ".cache/app/f"), old)
+	it := item(m.SourceAppCache, filepath.Join(home, ".cache/app"), old)
+	s := newService(t, home, &runner.Fake{Outputs: map[string]string{"kind get clusters": ""}}, it)
+	blocker := filepath.Join(t.TempDir(), "arquivo")
+	writeFile(t, blocker, old)
+	s.opts.AuditPath = filepath.Join(blocker, "audit.jsonl")
+	plan, _ := s.Preview(context.Background(), []string{it.ID})
+	report, err := s.Execute(context.Background(), plan.ID, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.AuditError == "" || !report.Outcomes[0].OK {
+		t.Fatalf("report: %+v", report)
+	}
+}
+
+// O diretório do repositório fica em btrfs nesta máquina; o /tmp costuma ser tmpfs.
+func TestArvoreComSubvolumeRecusada(t *testing.T) {
+	if _, err := exec.LookPath("btrfs"); err != nil {
+		t.Skip("btrfs ausente")
+	}
+	base, err := os.MkdirTemp(".", "faxina-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err = filepath.Abs(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(base) })
+	writeFile(t, filepath.Join(base, "app/f"), time.Now())
+	sub := filepath.Join(base, "app/sub")
+	if out, err := exec.Command("btrfs", "subvolume", "create", sub).CombinedOutput(); err != nil {
+		t.Skipf("não foi possível criar subvolume: %s", out)
+	}
+	if _, err := inspectTree(filepath.Join(base, "app")); err == nil {
+		t.Fatal("árvore com subvolume deveria ser recusada")
+	}
+	if err := os.Remove(sub); err != nil {
+		t.Logf("subvolume vazio não removido com rmdir: %v", err)
+	}
+	if _, err := inspectTree(filepath.Join(base, "app")); err != nil {
+		t.Fatalf("árvore no mesmo dispositivo deveria passar: %v", err)
 	}
 }

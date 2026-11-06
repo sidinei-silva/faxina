@@ -12,8 +12,9 @@ import (
 const (
 	inspectImage = "alpine:3.22"
 	inspectLabel = "faxina.inspect=true"
-	// inspectScript imprime "nome|entradas|registry?" para cada volume montado.
-	inspectScript = `for d in /v/*; do [ -d "$d" ] || continue; r=no; [ -d "$d/docker/registry" ] && r=yes; echo "$(basename "$d")|$(ls -A "$d" | head -20 | tr '\n' ',')|$r"; done`
+	// inspectScript imprime "nome|registry?|entradas" para cada volume montado.
+	// Falha ao listar vira "err", para nunca parecer um volume vazio.
+	inspectScript = `for d in /v/*; do [ -d "$d" ] || continue; n=$(basename "$d"); if l=$(ls -A "$d"); then r=no; [ -d "$d/docker/registry" ] && r=yes; echo "$n|$r|$(echo "$l" | head -20 | tr '\n' ',')"; else echo "$n|err|"; fi; done`
 )
 
 var volumeNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
@@ -38,7 +39,6 @@ func inspectVolumes(ctx context.Context, r runner.Runner, names []string) (map[s
 		return out, nil
 	}
 	cleanup := context.WithoutCancel(ctx)
-	removeStaleInspectors(cleanup, r)
 
 	pulled := false
 	if _, err := r.Run(ctx, "docker", "image", "inspect", inspectImage); err != nil {
@@ -64,9 +64,10 @@ func inspectVolumes(ctx context.Context, r runner.Runner, names []string) (map[s
 	}
 	for _, line := range strings.Split(listing, "\n") {
 		parts := strings.SplitN(line, "|", 3)
-		if len(parts) == 3 {
-			out[parts[0]] = detectVolumeContent(parts[1], parts[2] == "yes")
+		if len(parts) != 3 || parts[1] == "err" {
+			continue // sem listagem confiável, o conteúdo segue desconhecido
 		}
+		out[parts[0]] = detectVolumeContent(parts[2], parts[1] == "yes")
 	}
 	return out, nil
 }

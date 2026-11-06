@@ -103,6 +103,7 @@ export namespace clean {
 	    after: model.Disk;
 	    note: string;
 	    auditPath: string;
+	    auditError: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Report(source);
@@ -120,6 +121,7 @@ export namespace clean {
 	        this.after = this.convertValues(source["after"], model.Disk);
 	        this.note = source["note"];
 	        this.auditPath = source["auditPath"];
+	        this.auditError = source["auditError"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

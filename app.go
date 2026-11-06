@@ -50,17 +50,21 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) { a.ctx = ctx }
 
-func (a *App) begin() (context.Context, func()) {
-	ctx, cancel := context.WithCancel(a.ctx)
+// begin garante uma operação por vez, para o Cancelar sempre valer para a operação atual.
+func (a *App) begin() (context.Context, func(), error) {
 	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.cancel != nil {
+		return nil, nil, errors.New("outra operação está em andamento")
+	}
+	ctx, cancel := context.WithCancel(a.ctx)
 	a.cancel = cancel
-	a.mu.Unlock()
 	return ctx, func() {
 		a.mu.Lock()
 		a.cancel = nil
 		a.mu.Unlock()
 		cancel()
-	}
+	}, nil
 }
 
 // Cancel interrompe a varredura ou a limpeza em andamento.
@@ -77,7 +81,10 @@ func (a *App) Scan() (model.ScanResult, error) {
 	if a.home == "" {
 		return model.ScanResult{}, errors.New("não foi possível identificar a pasta pessoal")
 	}
-	ctx, done := a.begin()
+	ctx, done, err := a.begin()
+	if err != nil {
+		return model.ScanResult{}, err
+	}
 	defer done()
 	result := scan.Run(ctx, scan.Options{
 		Home:   a.home,
@@ -92,12 +99,20 @@ func (a *App) Scan() (model.ScanResult, error) {
 
 // Preview valida os IDs escolhidos e devolve a prévia da limpeza.
 func (a *App) Preview(ids []string) (*clean.Plan, error) {
-	return a.svc.Preview(a.ctx, ids)
+	ctx, done, err := a.begin()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	return a.svc.Preview(ctx, ids)
 }
 
 // Execute roda uma prévia já gerada.
 func (a *App) Execute(planID string) (*clean.Report, error) {
-	ctx, done := a.begin()
+	ctx, done, err := a.begin()
+	if err != nil {
+		return nil, err
+	}
 	defer done()
 	return a.svc.Execute(ctx, planID, false, func(n, total int, name string) {
 		runtime.EventsEmit(a.ctx, "clean:progress", CleanProgress{Done: n, Total: total, Name: name})

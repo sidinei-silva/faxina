@@ -18,6 +18,7 @@
   let openGroups = $state<Set<string>>(new Set())
   let plan = $state<any>(null)
   let reviewing = $state(false)
+  let preparing = $state(false)
   let error = $state('')
   let cleanProgress = $state({ done: 0, total: 0, name: '' })
   let report = $state<any>(null)
@@ -111,12 +112,16 @@
   }
 
   async function review() {
+    if (preparing) return
     error = ''
+    preparing = true
     try {
       plan = await Preview([...selected])
       reviewing = true
     } catch (err) {
       error = `Não foi possível preparar a limpeza: ${err}.`
+    } finally {
+      preparing = false
     }
   }
 
@@ -191,7 +196,7 @@
             Os tamanhos são estimativas: a compressão do btrfs e as camadas compartilhadas do Docker mudam o valor real.
           </p>
         </div>
-        <button class="ghost rescan" onclick={runScan}>Varrer de novo</button>
+        <button class="ghost rescan" disabled={preparing} onclick={runScan}>Varrer de novo</button>
       </header>
 
       <DiskStrip
@@ -268,7 +273,14 @@
       <strong>{plural(selected.size, 'item', 'itens')}</strong> para limpar, cerca de
       <strong>{bytes(selectedBytes)}</strong>
     </span>
-    <button class="primary" disabled={selected.size === 0} onclick={review}>Revisar limpeza</button>
+    {#if preparing}
+      <span class="dock-actions">
+        Conferindo os itens
+        <button class="primary" onclick={Cancel}>Cancelar</button>
+      </span>
+    {:else}
+      <button class="primary" disabled={selected.size === 0} onclick={review}>Revisar limpeza</button>
+    {/if}
   </footer>
 {/if}
 
@@ -368,6 +380,7 @@
     color: var(--paper);
   }
   .dock :global(.primary) { background: var(--paper); color: var(--ink); }
+  .dock-actions { display: flex; align-items: center; gap: 12px; }
   .waiting { display: flex; flex-direction: column; align-items: flex-start; gap: 16px; padding-top: 14vh; }
   .stage { min-height: 1.4em; margin: 0; color: var(--muted); overflow-wrap: anywhere; }
   .sweep { width: 100%; height: 76px; overflow: hidden; border-radius: 3px; background: var(--strip-bg); }

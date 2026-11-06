@@ -58,6 +58,9 @@ func TestApply(t *testing.T) {
 		{"node_modules parado", m.Item{Source: m.SourceNodeModules, Facts: m.Facts{HasLockfile: true}}, m.StatusCandidate, m.ActionRemovePath},
 		{"backup nunca é padrão", m.Item{Source: m.SourceBackup}, m.StatusCandidate, m.ActionRemovePath},
 
+		{"módulos Go abertos", m.Item{Source: m.SourceGoMod, Facts: m.Facts{OpenByProcess: true}}, m.StatusInUse, m.ActionNone},
+		{"backup aberto", m.Item{Source: m.SourceBackup, Facts: m.Facts{OpenByProcess: true}}, m.StatusInUse, m.ActionNone},
+		{"arquivo grande aberto", m.Item{Source: m.SourceLargeFile, Facts: m.Facts{OpenByProcess: true}}, m.StatusInUse, m.ActionNone},
 		{"jogo antigo sem ação", m.Item{Source: m.SourceSteamGame, Facts: m.Facts{LastActivity: old.Add(-100 * 24 * time.Hour)}}, m.StatusCandidate, m.ActionNone},
 		{"jogo recente", m.Item{Source: m.SourceSteamGame, Facts: m.Facts{LastActivity: recent}}, m.StatusProtected, m.ActionNone},
 		{"unity sem ação", m.Item{Source: m.SourceUnity}, m.StatusCandidate, m.ActionNone},

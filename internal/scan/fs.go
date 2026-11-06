@@ -172,10 +172,13 @@ func (s *fsScan) walk(dir string, dev uint64, claimed *bucket) {
 			continue
 		}
 		size := st.Blocks * 512
+		mtime := info.ModTime()
 		if st.Nlink > 1 && !s.firstLink(uint64(st.Dev), st.Ino) {
+			if claimed != nil {
+				claimed.add(0, mtime.UnixNano())
+			}
 			continue
 		}
-		mtime := info.ModTime()
 		if claimed != nil {
 			claimed.add(size, mtime.UnixNano())
 			continue
