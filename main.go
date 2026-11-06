@@ -3,6 +3,8 @@ package main
 import (
 	"embed"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -12,23 +14,34 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+// extendPath garante kind e kubectl quando o app é aberto pelo menu do desktop, sem o PATH do shell.
+func extendPath() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	extra := []string{filepath.Join(home, ".local/share/mise/shims"), filepath.Join(home, ".local/bin"), "/usr/local/bin"}
+	_ = os.Setenv("PATH", os.Getenv("PATH")+":"+strings.Join(extra, ":"))
+}
+
 func main() {
+	extendPath()
 	if handled, code := runCLI(os.Args[1:]); handled {
 		os.Exit(code)
 	}
 
-	// Create an instance of the app structure
 	app := NewApp()
 
-	// Create application with options
 	err := wails.Run(&options.App{
-		Title:  "faxina",
-		Width:  1024,
-		Height: 768,
+		Title:     "Faxina",
+		Width:     1180,
+		Height:    840,
+		MinWidth:  820,
+		MinHeight: 600,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
+		BackgroundColour: &options.RGBA{R: 232, G: 238, B: 242, A: 1},
 		OnStartup:        app.startup,
 		Bind: []interface{}{
 			app,

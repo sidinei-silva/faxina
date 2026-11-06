@@ -1,26 +1,95 @@
-html {
-    background-color: rgba(27, 38, 54, 1);
-    text-align: center;
-    color: white;
+:root {
+  color-scheme: light dark;
+  --display: 'Bricolage Grotesque Variable', 'Noto Sans', sans-serif;
+  --body: 'Atkinson Hyperlegible', 'Noto Sans', sans-serif;
+
+  --paper: #e8eef2;
+  --ink: #15252f;
+  --muted: #4d606c;
+  --line: #cdd8df;
+  --line-strong: #93a5b0;
+  --hover: #d9e3e9;
+  --selected-row: #d4e8e4;
+  --field: #f3f7f9;
+  --strip-bg: #d3dee5;
+  --shadow: rgb(16 34 46 / 0.35);
+  --scrim: rgb(16 34 46 / 0.55);
+
+  --removable: #0b7f75;
+  --removable-text: #07695f;
+  --candidate: #b26a00;
+  --in-use: #4656c4;
+  --protected: #62737f;
+  --danger: #b3261e;
 }
 
-body {
-    margin: 0;
-    color: white;
-    font-family: "Nunito", -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto",
-    "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
-    sans-serif;
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #17242d;
+    --ink: #e4edf2;
+    --muted: #9db0bb;
+    --line: #2c3d48;
+    --line-strong: #52666f;
+    --hover: #223340;
+    --selected-row: #1b3b3b;
+    --field: #1e2e38;
+    --strip-bg: #22333e;
+    --shadow: rgb(0 0 0 / 0.5);
+    --scrim: rgb(0 0 0 / 0.6);
+
+    --removable: #2fb5a7;
+    --removable-text: #5bd1c4;
+    --candidate: #dd9a2e;
+    --in-use: #8392ec;
+    --protected: #7d909b;
+    --danger: #ef6a60;
+  }
 }
 
-@font-face {
-    font-family: "Nunito";
-    font-style: normal;
-    font-weight: 400;
-    src: local(""),
-    url("assets/fonts/nunito-v16-latin-regular.woff2") format("woff2");
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: 16px;
+  line-height: 1.4;
 }
 
-#app {
-    height: 100vh;
-    text-align: center;
+:focus-visible {
+  outline: 2px solid var(--in-use);
+  outline-offset: 2px;
+}
+
+button { font-family: inherit; }
+
+.primary, .ghost, .danger {
+  padding: 8px 16px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.primary { background: var(--ink); color: var(--paper); }
+.ghost { border-color: var(--line-strong); background: none; color: var(--ink); font-weight: 400; }
+.ghost:hover { background: var(--hover); }
+.danger { background: var(--danger); color: #fff; }
+.primary:disabled, .danger:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.link {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-size: 0.85rem;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
 }

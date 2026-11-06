@@ -127,7 +127,7 @@ func dockerImages(df dockerDF, kube KubeState) []m.Item {
 			ref, tag, name = img.Repository+":"+img.Tag, img.Tag, img.Repository+":"+img.Tag
 		}
 		size := parseDockerSize(img.UniqueSize)
-		detail := fmt.Sprintf("Tamanho total %s; %s exclusivos desta imagem.", img.Size, img.UniqueSize)
+		detail := fmt.Sprintf("Tamanho total %s; %s exclusivos desta imagem.", FormatBytes(parseDockerSize(img.Size)), FormatBytes(size))
 		if seen[img.ID] {
 			size, detail = 0, "Mesma imagem de outra tag: o espaço só é liberado ao remover todas as tags."
 		}
@@ -241,5 +241,5 @@ func FormatBytes(n int64) string {
 		div *= unit
 		exp++
 	}
-	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+	return strings.Replace(fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp]), ".", ",", 1)
 }
