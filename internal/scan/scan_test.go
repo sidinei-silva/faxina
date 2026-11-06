@@ -1,0 +1,228 @@
+package scan
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	m "faxina/internal/model"
+	"faxina/internal/runner"
+)
+
+func write(t *testing.T, path string, size int, mtime time.Time) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, make([]byte, size), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !mtime.IsZero() {
+		if err := os.Chtimes(path, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func bySource(items []m.Item, src m.Source) []m.Item {
+	var out []m.Item
+	for _, it := range items {
+		if it.Source == src {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+func TestScanHome(t *testing.T) {
+	home := t.TempDir()
+	now := time.Now()
+	old := now.Add(-200 * 24 * time.Hour)
+	write(t, filepath.Join(home, ".local/share/Trash/files/a"), 4096, old)
+	write(t, filepath.Join(home, ".cache/go-build/x"), 4096, old)
+	write(t, filepath.Join(home, ".cache/someapp/big"), 2<<20, old)
+	write(t, filepath.Join(home, ".cache/paru/pkg"), 2<<20, old)
+	write(t, filepath.Join(home, "meus_projetos/dev/pessoal/a/node_modules/x/i.js"), 4096, old)
+	write(t, filepath.Join(home, "meus_projetos/dev/pessoal/a/package-lock.json"), 10, old)
+	write(t, filepath.Join(home, "meus_projetos/dev/pessoal/b/node_modules/x/i.js"), 4096, old)
+	write(t, filepath.Join(home, "meus_projetos/dev/pessoal/b/package.json"), 10, now)
+	write(t, filepath.Join(home, "meus_projetos/dev/work/gamersclub/gc-stack/tmp/files/db"), 4096, old)
+	write(t, filepath.Join(home, "Documentos/banco.sql.gz"), minBackupSize+1, old)
+	write(t, filepath.Join(home, "Documentos/foto.png"), 4096, old)
+	write(t, filepath.Join(home, ".local/share/Steam/steamapps/common/Jogo/d"), 4096, old)
+	manifest := `"AppState" { "appid" "42" "name" "Jogo Teste" "installdir" "Jogo" "LastPlayed" "1700000000" }`
+	write(t, filepath.Join(home, ".local/share/Steam/steamapps/appmanifest_42.acf"), 0, time.Time{})
+	if err := os.WriteFile(filepath.Join(home, ".local/share/Steam/steamapps/appmanifest_42.acf"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/etc", filepath.Join(home, "link-externo")); err != nil {
+		t.Fatal(err)
+	}
+
+	items, _ := ScanHome(context.Background(), home, now, nil)
+
+	for src, want := range map[m.Source]int{
+		m.SourceTrash: 1, m.SourceRegenCache: 1, m.SourceAppCache: 1, m.SourceToolCache: 1,
+		m.SourceNodeModules: 2, m.SourceGCStackData: 1, m.SourceBackup: 1, m.SourceSteamGame: 1,
+	} {
+		if got := len(bySource(items, src)); got != want {
+			t.Errorf("%s: %d itens, quer %d", src, got, want)
+		}
+	}
+	for _, it := range bySource(items, m.SourceNodeModules) {
+		switch {
+		case strings.HasSuffix(it.Name, "/a"):
+			if !it.Facts.HasLockfile || it.Facts.ProjectActive {
+				t.Errorf("projeto a: %+v", it.Facts)
+			}
+		case strings.HasSuffix(it.Name, "/b"):
+			if it.Facts.HasLockfile || !it.Facts.ProjectActive {
+				t.Errorf("projeto b: %+v", it.Facts)
+			}
+		}
+	}
+	if g := bySource(items, m.SourceSteamGame); len(g) == 1 && (g[0].Name != "Jogo Teste" || g[0].Facts.LastActivity.Unix() != 1700000000) {
+		t.Errorf("jogo: %+v", g[0])
+	}
+	for _, it := range items {
+		if strings.Contains(it.Path, "link-externo") {
+			t.Errorf("seguiu symlink: %s", it.Path)
+		}
+	}
+}
+
+func TestHardlinkContadoUmaVez(t *testing.T) {
+	home := t.TempDir()
+	a := filepath.Join(home, ".cache/app/a")
+	write(t, a, 2<<20, time.Now())
+	if err := os.Link(a, filepath.Join(home, ".cache/app/b")); err != nil {
+		t.Fatal(err)
+	}
+	items, _ := ScanHome(context.Background(), home, time.Now(), nil)
+	got := bySource(items, m.SourceAppCache)
+	if len(got) != 1 || got[0].SizeBytes > 3<<20 {
+		t.Fatalf("hardlink contado duas vezes: %+v", got)
+	}
+}
+
+func TestDocker(t *testing.T) {
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	df := `{"Images":[
+	 {"ID":"sha256:aaa","Repository":"localhost:5000/svc","Tag":"old","CreatedAt":"2026-09-01 10:00:00 -0300 -03","Size":"2GB","UniqueSize":"100MB","Containers":"0"},
+	 {"ID":"sha256:bbb","Repository":"localhost:5000/svc","Tag":"new","CreatedAt":"2026-10-01 10:00:00 -0300 -03","Size":"2GB","UniqueSize":"200MB","Containers":"0"},
+	 {"ID":"sha256:ccc","Repository":"kindest/node","Tag":"<none>","CreatedAt":"2026-09-01 10:00:00 -0300 -03","Size":"1GB","UniqueSize":"1GB","Containers":"0"},
+	 {"ID":"sha256:ddd","Repository":"registry","Tag":"3","CreatedAt":"2026-09-01 10:00:00 -0300 -03","Size":"85MB","UniqueSize":"85MB","Containers":"0"},
+	 {"ID":"sha256:bbb","Repository":"localhost:5000/alias","Tag":"x","CreatedAt":"2026-10-01 10:00:00 -0300 -03","Size":"2GB","UniqueSize":"200MB","Containers":"0"}],
+	"Volumes":[
+	 {"Name":"anon1","Labels":"com.docker.volume.anonymous=","Links":"0","Size":"4.35GB"},
+	 {"Name":"dados","Labels":"","Links":"0","Size":"1GB"},
+	 {"Name":"usado","Labels":"com.docker.volume.anonymous=","Links":"1","Size":"1GB"}],
+	"BuildCache":[
+	 {"InUse":"false","Shared":"false","Size":"1GB","CreatedAt":"2026-09-01 10:00:00.5 +0000 UTC","LastUsedAt":"2026-09-02 10:00:00.5 +0000 UTC"},
+	 {"InUse":"false","Shared":"true","Size":"9GB","CreatedAt":"2026-09-01 10:00:00.5 +0000 UTC","LastUsedAt":"2026-09-02 10:00:00.5 +0000 UTC"},
+	 {"InUse":"false","Shared":"false","Size":"2GB","CreatedAt":"2026-11-05 10:00:00.5 +0000 UTC","LastUsedAt":"2026-11-05 11:00:00.5 +0000 UTC"}]}`
+	r := &runner.Fake{Outputs: map[string]string{
+		"docker system df -v --format json":       df,
+		"docker volume inspect anon1 dados usado": `[{"Name":"anon1","CreatedAt":"2026-09-01T10:00:00-03:00"},{"Name":"dados","CreatedAt":"2026-09-01T10:00:00-03:00"},{"Name":"usado","CreatedAt":"2026-09-01T10:00:00-03:00"}]`,
+	}}
+	items, warnings := collectDocker(context.Background(), r, KubeState{Deployed: map[string]bool{}}, now)
+	if len(warnings) > 0 {
+		t.Fatalf("avisos: %v", warnings)
+	}
+	find := func(label string) m.Facts {
+		for _, it := range items {
+			if it.Facts.Label == label {
+				return it.Facts
+			}
+		}
+		t.Fatalf("item %s não encontrado", label)
+		return m.Facts{}
+	}
+	if f := find("localhost:5000/svc:new"); !f.NewestInRepo || !f.LocalRegistry {
+		t.Errorf("new: %+v", f)
+	}
+	if f := find("localhost:5000/svc:old"); f.NewestInRepo || f.CreatedAt.IsZero() {
+		t.Errorf("old: %+v", f)
+	}
+	if f := find("sha256:ccc"); f.Tag != "<none>" || !f.Infra {
+		t.Errorf("kindest sem tag: %+v", f)
+	}
+	if f := find("anon1"); !f.Anonymous || f.Containers != 0 || f.CreatedAt.IsZero() {
+		t.Errorf("anon1: %+v", f)
+	}
+	if f := find("dados"); f.Anonymous {
+		t.Errorf("dados: %+v", f)
+	}
+	if f := find("usado"); f.Containers != 1 {
+		t.Errorf("usado: %+v", f)
+	}
+	for _, it := range items {
+		if it.Facts.Label == "localhost:5000/alias:x" && it.SizeBytes != 0 {
+			t.Errorf("tag duplicada somou tamanho: %d", it.SizeBytes)
+		}
+	}
+	old := bySource(items, m.SourceBuildCacheOld)
+	if len(old) != 1 || old[0].SizeBytes != 1e9 {
+		t.Errorf("cache antigo: %+v", old)
+	}
+	if rec := bySource(items, m.SourceBuildCacheNew); len(rec) != 1 || rec[0].SizeBytes != 2e9 {
+		t.Errorf("cache recente: %+v", rec)
+	}
+}
+
+func TestDockerIndisponivel(t *testing.T) {
+	items, warnings := collectDocker(context.Background(), &runner.Fake{}, KubeState{}, time.Now())
+	if len(items) != 0 || len(warnings) != 1 {
+		t.Fatalf("items=%d warnings=%v", len(items), warnings)
+	}
+}
+
+func TestKube(t *testing.T) {
+	r := &runner.Fake{Outputs: map[string]string{
+		"kind get clusters":                             "gc\n",
+		"kubectl --context kind-gc get pods -A -o json": `{"items":[{"spec":{"containers":[{"image":"registry.local:5000/svc:abc"}],"initContainers":[{"image":"localhost:5000/init:1"}]}}]}`,
+	}}
+	state, _ := CollectKube(context.Background(), r)
+	if !state.Deployed["svc:abc"] || !state.Deployed["init:1"] || state.Unknown {
+		t.Fatalf("%+v", state)
+	}
+	if !state.Deployed[NormalizeImageRef("localhost:5000/svc:abc")] {
+		t.Fatal("referência local não bate com a do cluster")
+	}
+	failing := &runner.Fake{Outputs: map[string]string{"kind get clusters": "gc\n"}}
+	if state, _ := CollectKube(context.Background(), failing); !state.Unknown {
+		t.Fatal("falha na consulta precisa marcar Unknown")
+	}
+	if state, _ := CollectKube(context.Background(), &runner.Fake{}); !state.Unknown {
+		t.Fatal("kind ausente precisa marcar Unknown")
+	}
+}
+
+func TestParsers(t *testing.T) {
+	for in, want := range map[string]int64{"4.35GB": 4350000000, "117.3MB": 117300000, "0B": 0, "10kB": 10000, "lixo": 0} {
+		if got := parseDockerSize(in); got != want {
+			t.Errorf("parseDockerSize(%q) = %d, quer %d", in, got, want)
+		}
+	}
+	if got := parsePaccacheSaved("==> finished dry run: 100 candidates (disk space saved: 3.88 GiB)"); got < 4100000000 || got > 4200000000 {
+		t.Errorf("paccache = %d", got)
+	}
+	if parseDockerTime("2026-11-05 01:57:09 -0300 -03").IsZero() {
+		t.Error("data da imagem não interpretada")
+	}
+	if parseDockerTime("2026-09-15 12:17:52.217141904 +0000 UTC").IsZero() {
+		t.Error("data do build cache não interpretada")
+	}
+}
+
+func TestOpenPaths(t *testing.T) {
+	o := OpenPaths{paths: []string{"/a/b-x/f", "/a/b/c", "/z"}}
+	for path, want := range map[string]bool{"/a/b": true, "/a/b/c": true, "/a/b-x": true, "/a/bb": false, "/q": false, "/z": true} {
+		if got := o.Contains(path); got != want {
+			t.Errorf("Contains(%s) = %v, quer %v", path, got, want)
+		}
+	}
+}
