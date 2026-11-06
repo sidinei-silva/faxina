@@ -197,6 +197,7 @@ export namespace model {
 	    Tag: string;
 	    ImageID: string;
 	    NewestInRepo: boolean;
+	    OlderDuplicate: boolean;
 	    LocalRegistry: boolean;
 	    Infra: boolean;
 	    Deployed: boolean;
@@ -222,6 +223,7 @@ export namespace model {
 	        this.Tag = source["Tag"];
 	        this.ImageID = source["ImageID"];
 	        this.NewestInRepo = source["NewestInRepo"];
+	        this.OlderDuplicate = source["OlderDuplicate"];
 	        this.LocalRegistry = source["LocalRegistry"];
 	        this.Infra = source["Infra"];
 	        this.Deployed = source["Deployed"];

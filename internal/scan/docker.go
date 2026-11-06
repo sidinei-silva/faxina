@@ -101,25 +101,57 @@ func dockerVolumes(ctx context.Context, r runner.Runner, df dockerDF) ([]m.Item,
 }
 
 func dockerImages(df dockerDF, kube KubeState) []m.Item {
-	newest := map[string]time.Time{}
 	type parsed struct {
-		created time.Time
-		local   bool
+		created  time.Time
+		local    bool
+		tagged   bool
+		deployed bool
+		older    bool
 	}
 	info := make([]parsed, len(df.Images))
+	// keeper guarda a única tag que fica de cada nome. Só tags com data entram:
+	// imagem sem tag não pode ocupar o lugar da mais recente.
+	keeper := map[string]int{}
 	for i, img := range df.Images {
-		t := parseDockerTime(img.CreatedAt)
-		local := isLocalRegistry(img.Repository)
-		info[i] = parsed{t, local}
-		if local && t.After(newest[img.Repository]) {
-			newest[img.Repository] = t
+		tagged := img.Tag != "" && img.Tag != "<none>" && img.Repository != "<none>"
+		info[i] = parsed{
+			created:  parseDockerTime(img.CreatedAt),
+			local:    isLocalRegistry(img.Repository),
+			tagged:   tagged,
+			deployed: tagged && kube.Uses(img.Repository+":"+img.Tag),
+		}
+		if !tagged || info[i].created.IsZero() {
+			continue
+		}
+		best, ok := keeper[img.Repository]
+		if !ok {
+			keeper[img.Repository] = i
+			continue
+		}
+		// Builds com cache podem ter a mesma data: o desempate precisa sempre dar um vencedor.
+		a, b := info[i], info[best]
+		switch {
+		case a.created.After(b.created),
+			a.created.Equal(b.created) && a.deployed && !b.deployed,
+			a.created.Equal(b.created) && a.deployed == b.deployed && img.Tag > df.Images[best].Tag:
+			keeper[img.Repository] = i
 		}
 	}
-	seen := map[string]bool{}
+	// O tamanho fica na tag que permanece: remover um apelido não libera o espaço da imagem.
+	carrier := map[string]int{}
+	for i, img := range df.Images {
+		best, hasKeeper := keeper[img.Repository]
+		info[i].older = hasKeeper && info[i].tagged && !info[i].created.IsZero() && i != best &&
+			(info[i].local || !versionTagRe.MatchString(img.Tag))
+		cur, ok := carrier[img.ID]
+		if !ok || (info[cur].older && !info[i].older) {
+			carrier[img.ID] = i
+		}
+	}
 	items := make([]m.Item, 0, len(df.Images))
 	for i, img := range df.Images {
 		containers, _ := strconv.Atoi(img.Containers)
-		tagged := img.Tag != "" && img.Tag != "<none>" && img.Repository != "<none>"
+		tagged := info[i].tagged
 		ref, tag := img.ID, "<none>"
 		name := "Imagem sem tag " + shortID(strings.TrimPrefix(img.ID, "sha256:"))
 		if img.Repository != "<none>" && !tagged {
@@ -130,22 +162,23 @@ func dockerImages(df dockerDF, kube KubeState) []m.Item {
 		}
 		size := parseDockerSize(img.UniqueSize)
 		detail := fmt.Sprintf("Tamanho total %s; %s exclusivos desta imagem.", FormatBytes(parseDockerSize(img.Size)), FormatBytes(size))
-		if seen[img.ID] {
+		if carrier[img.ID] != i {
 			size, detail = 0, "Mesma imagem de outra tag: o espaço só é liberado ao remover todas as tags."
 		}
-		seen[img.ID] = true
+		best, hasKeeper := keeper[img.Repository]
 		items = append(items, m.Item{
 			ID:     m.NewID(m.SourceImage, ref),
 			Source: m.SourceImage, Group: m.GroupImages,
 			Name: name, Detail: detail, SizeBytes: size, SizeEstimated: true,
 			Facts: m.Facts{
 				Label: ref, Repo: img.Repository, Tag: tag, ImageID: img.ID, Containers: containers,
-				CreatedAt:     info[i].created,
-				LocalRegistry: info[i].local,
-				NewestInRepo:  info[i].local && !info[i].created.Before(newest[img.Repository]),
-				Infra:         classify.IsInfraImage(img.Repository),
-				Deployed:      tagged && kube.Uses(ref),
-				KubeUnknown:   kube.Unknown,
+				CreatedAt:      info[i].created,
+				LocalRegistry:  info[i].local,
+				NewestInRepo:   info[i].local && hasKeeper && i == best,
+				OlderDuplicate: info[i].older,
+				Infra:          classify.IsInfraImage(img.Repository),
+				Deployed:       info[i].deployed,
+				KubeUnknown:    kube.Unknown,
 			},
 		})
 	}
@@ -205,6 +238,9 @@ func shortID(id string) string {
 	}
 	return id
 }
+
+// versionTagRe reconhece versões: em imagens externas, mysql:5.7 e mysql:8 não são duplicatas.
+var versionTagRe = regexp.MustCompile(`^v?[0-9]+(\.[0-9]+)*([-_.].*)?$`)
 
 var dockerSizeRe = regexp.MustCompile(`^([0-9.]+)\s*([kKMGT]?)i?B$`)
 

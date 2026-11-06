@@ -467,7 +467,7 @@ func (v *validator) checkImage(it m.Item) error {
 	if strings.TrimSpace(out) != "" {
 		return errors.New("Um container passou a usar esta imagem.")
 	}
-	if !it.Facts.LocalRegistry {
+	if !it.Facts.LocalRegistry && !it.Facts.OlderDuplicate {
 		return nil
 	}
 	v.load()

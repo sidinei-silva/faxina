@@ -42,6 +42,16 @@ Nada nos seus dados. Para saber o conteúdo dos volumes Docker sem container, el
 | Anônimo com menos de 7 dias | Candidato |
 | Nomeado | Candidato |
 
+## Regras de imagens
+
+| Imagem sem container ou pod | Status |
+|---|---|
+| Sem tag | Removível |
+| Tag mais antiga de um nome repetido, mesmo recente | Removível |
+| Tag mais recente de cada nome | Candidato |
+| Tags de versão em imagens externas, como `mysql:5.7` e `mysql:8.0` | Candidato |
+| `registry` e `kindest/node` com tag | Protegido |
+
 ## Segurança da limpeza
 
 - A UI envia só IDs. Status, ação e alvo vêm da última varredura no backend.

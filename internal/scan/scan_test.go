@@ -178,6 +178,86 @@ func TestDocker(t *testing.T) {
 	}
 }
 
+func TestImagensDuplicadas(t *testing.T) {
+	img := func(repo, tag, created string) string {
+		return `{"ID":"sha256:` + repo + tag + `","Repository":"` + repo + `","Tag":"` + tag + `","CreatedAt":"` + created + `","Size":"1GB","UniqueSize":"1GB","Containers":"0"}`
+	}
+	const older, newer, newest = "2026-11-03 10:00:00 -0300 -03", "2026-11-04 10:00:00 -0300 -03", "2026-11-05 10:00:00 -0300 -03"
+	df := `{"Images":[` + strings.Join([]string{
+		img("localhost:5000/svc", "a1", older),
+		img("localhost:5000/svc", "b2", newer),
+		img("localhost:5000/svc", "<none>", newest),
+		img("localhost:5000/unica", "x", older),
+		img("gamersclub/app", "abc123", older),
+		img("gamersclub/app", "def456", newer),
+		img("mysql", "5.7", older),
+		img("mysql", "8.0", newer),
+	}, ",") + `],"Volumes":[],"BuildCache":[]}`
+	r := &runner.Fake{Outputs: map[string]string{
+		"docker ps -a -q --filter label=" + inspectLabel: "",
+		"docker system df -v --format json":              df,
+	}}
+	items, warnings := collectDocker(context.Background(), r, KubeState{Deployed: map[string]bool{}}, time.Now())
+	if len(warnings) > 0 {
+		t.Fatalf("avisos: %v", warnings)
+	}
+	got := map[string]bool{}
+	for _, it := range items {
+		got[it.Facts.Repo+":"+it.Facts.Tag] = it.Facts.OlderDuplicate
+	}
+	for ref, want := range map[string]bool{
+		"localhost:5000/svc:a1":     true,  // antiga, mesmo com menos de 7 dias
+		"localhost:5000/svc:b2":     false, // a imagem sem tag mais nova não conta
+		"localhost:5000/svc:<none>": false,
+		"localhost:5000/unica:x":    false,
+		"gamersclub/app:abc123":     true,
+		"gamersclub/app:def456":     false,
+		"mysql:5.7":                 false, // versões diferentes de propósito
+		"mysql:8.0":                 false,
+	} {
+		if got[ref] != want {
+			t.Errorf("%s: OlderDuplicate = %v, quer %v", ref, got[ref], want)
+		}
+	}
+}
+
+func TestEmpateDeixaUmaTagETamanhoNela(t *testing.T) {
+	const when = "2026-11-03 10:00:00 -0300 -03"
+	img := func(tag string) string {
+		return `{"ID":"sha256:mesma","Repository":"localhost:5000/nginx","Tag":"` + tag + `","CreatedAt":"` + when + `","Size":"2GB","UniqueSize":"1GB","Containers":"0"}`
+	}
+	df := `{"Images":[` + img("aaa") + `,` + img("ccc") + `,` + img("bbb") + `],"Volumes":[],"BuildCache":[]}`
+	r := &runner.Fake{Outputs: map[string]string{
+		"docker ps -a -q --filter label=" + inspectLabel: "",
+		"docker system df -v --format json":              df,
+	}}
+	items, _ := collectDocker(context.Background(), r, KubeState{Deployed: map[string]bool{}}, time.Now())
+	kept := 0
+	for _, it := range items {
+		if it.Facts.OlderDuplicate {
+			if it.SizeBytes != 0 {
+				t.Errorf("%s: apelido removido não libera espaço, tamanho = %d", it.Name, it.SizeBytes)
+			}
+			continue
+		}
+		kept++
+		if it.Facts.Tag != "ccc" || it.SizeBytes != 1e9 || !it.Facts.NewestInRepo {
+			t.Errorf("tag que fica: %+v tamanho %d", it.Facts, it.SizeBytes)
+		}
+	}
+	if kept != 1 {
+		t.Fatalf("deveria sobrar 1 tag, sobraram %d", kept)
+	}
+
+	deployed := KubeState{Deployed: map[string]bool{"nginx:aaa": true}, DigestRepos: map[string]bool{}}
+	items, _ = collectDocker(context.Background(), r, deployed, time.Now())
+	for _, it := range items {
+		if it.Facts.Tag == "aaa" && (it.Facts.OlderDuplicate || !it.Facts.Deployed) {
+			t.Errorf("no empate, a tag usada por um pod deve ser a que fica: %+v", it.Facts)
+		}
+	}
+}
+
 func TestDockerIndisponivel(t *testing.T) {
 	items, warnings := collectDocker(context.Background(), &runner.Fake{}, KubeState{}, time.Now())
 	if len(items) != 0 || len(warnings) != 1 {

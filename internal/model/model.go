@@ -99,24 +99,26 @@ const (
 
 // Facts guarda o que os coletores observaram. Não é enviado à UI.
 type Facts struct {
-	Containers    int
-	Anonymous     bool
-	Content       VolumeContent
-	CreatedAt     time.Time
-	LastActivity  time.Time
-	Repo          string
-	Tag           string
-	ImageID       string
-	NewestInRepo  bool
-	LocalRegistry bool
-	Infra         bool
-	Deployed      bool
-	KubeUnknown   bool
-	OpenByProcess bool
-	HasLockfile   bool
-	ProjectActive bool
-	Label         string
-	ManualHint    string
+	Containers   int
+	Anonymous    bool
+	Content      VolumeContent
+	CreatedAt    time.Time
+	LastActivity time.Time
+	Repo         string
+	Tag          string
+	ImageID      string
+	NewestInRepo bool
+	// OlderDuplicate indica que há uma tag mais recente da mesma imagem.
+	OlderDuplicate bool
+	LocalRegistry  bool
+	Infra          bool
+	Deployed       bool
+	KubeUnknown    bool
+	OpenByProcess  bool
+	HasLockfile    bool
+	ProjectActive  bool
+	Label          string
+	ManualHint     string
 }
 
 // Item é uma unidade exibida e, quando permitido, limpável.

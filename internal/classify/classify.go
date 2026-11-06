@@ -61,18 +61,16 @@ func Apply(it *m.Item, now time.Time) {
 			set(m.StatusInUse, fmt.Sprintf("Usada por %d container(s).", f.Containers), none)
 		case f.Deployed:
 			set(m.StatusInUse, "Usada por um pod do cluster kind.", none)
-		case f.KubeUnknown && f.LocalRegistry:
+		case f.KubeUnknown && (f.LocalRegistry || f.OlderDuplicate):
 			set(m.StatusCandidate, "O cluster kind está ativo, mas não foi possível consultar os pods.", rm)
 		case f.Tag == "<none>":
 			set(m.StatusRemovable, "Imagem sem tag e sem container.", rm)
 		case f.Infra:
 			set(m.StatusProtected, "Infraestrutura do ambiente kind e do gc-stack.", none)
-		case f.LocalRegistry && !f.NewestInRepo && !f.CreatedAt.IsZero() && now.Sub(f.CreatedAt) > dockerMinAge:
-			set(m.StatusRemovable, "Build antigo do registry local, com tag mais recente disponível.", rm)
+		case f.OlderDuplicate:
+			set(m.StatusRemovable, "Existe uma tag mais recente desta mesma imagem.", rm)
 		case f.LocalRegistry && f.NewestInRepo:
 			set(m.StatusCandidate, "Build mais recente deste serviço: remover exige novo build.", rm)
-		case f.LocalRegistry:
-			set(m.StatusCandidate, "Build antigo, mas criado há menos de 7 dias.", rm)
 		default:
 			set(m.StatusCandidate, "Imagem sem container: remover exige novo download.", rm)
 		}
